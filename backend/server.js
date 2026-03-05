@@ -84,7 +84,7 @@ app.post("/api/students", async (req, res) => {
         department, semester, batch, status, malpractice_flag)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        formattedName, ,
+        formattedName,
         reg,
         emailValue,
         passwordHash,
@@ -486,6 +486,143 @@ app.delete("/api/students/:id", async (req, res) => {
   }
 });
 
+
+// ✅ Invigilator Login
+app.post("/api/invigilators/login", async (req, res) => {
+  try {
+    const { staffId, password } = req.body;
+
+    if (!staffId || !password) {
+      return res.status(400).json({
+        error: "staffId and password are required",
+      });
+    }
+
+    const staff = staffId.toUpperCase();
+
+    // 🔹 Fetch invigilator
+    const [rows] = await db.execute(
+      `SELECT *
+       FROM invigilators
+       WHERE staff_id = ?`,
+      [staff]
+    );
+
+    if (rows.length === 0) {
+      return res.status(401).json({
+        error: "Invalid staff ID or password",
+      });
+    }
+
+    const invigilator = rows[0];
+
+    // 🔒 Compare password
+    const isMatch = await bcrypt.compare(
+      password,
+      invigilator.password_hash
+    );
+
+    if (!isMatch) {
+      return res.status(401).json({
+        error: "Invalid staff ID or password",
+      });
+    }
+
+    // remove password hash
+    delete invigilator.password_hash;
+
+    res.json({
+      message: "Login successful",
+      invigilator: {
+        name: invigilator.name,
+        staffId: invigilator.staff_id,
+        email: invigilator.email,
+        department: invigilator.department,
+        phone: invigilator.phone,
+        createdAt: invigilator.created_at,
+      },
+    });
+
+  } catch (err) {
+    console.error("Invigilator login error:", err.message);
+    res.status(500).json({
+      error: "Internal server error",
+    });
+  }
+});
+
+
+// ✅ Register Invigilator
+app.post("/api/invigilators", async (req, res) => {
+  try {
+    const {
+      name,
+      email,
+      staffId,
+      dob,
+      department,
+      phone
+    } = req.body;
+
+    if (!name || !staffId || !dob) {
+      return res.status(400).json({
+        error: "name, staffId and dob are required"
+      });
+    }
+
+    const staff = staffId.toUpperCase();
+
+    // extract birth year
+    const birthYear = dob.split("-")[0];
+
+    // generate default password
+    const defaultPassword = `${staff}@${birthYear}`;
+
+    // hash password
+    const passwordHash = await bcrypt.hash(defaultPassword, 10);
+
+    // insert into DB
+    await db.execute(
+      `INSERT INTO invigilators
+       (name, email, staff_id, dob, password_hash, department, phone)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        name,
+        email ?? null,
+        staff,
+        dob,
+        passwordHash,
+        department ?? null,
+        phone ?? null
+      ]
+    );
+
+    res.status(201).json({
+      message: "Invigilator created successfully",
+      invigilator: {
+        name,
+        staffId: staff,
+        email,
+        dob,
+        department,
+        phone
+      }
+    });
+
+  } catch (err) {
+    console.error("Create invigilator error:", err.message);
+
+    if (err.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        error: "An invigilator with this staffId or email already exists"
+      });
+    }
+
+    res.status(500).json({
+      error: "Internal server error"
+    });
+  }
+});
 
 
 
