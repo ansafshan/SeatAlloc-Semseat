@@ -1,0 +1,16 @@
+# Flutter
+build/
+.dart_tool/
+.idea/
+.vscode/
+*.log
+
+# Node backend
+node_modules/
+.env
+dist/
+npm-debug.log
+
+# OS
+Thumbs.db
+.DS_Store
