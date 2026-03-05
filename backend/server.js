@@ -542,7 +542,7 @@ app.post("/api/invigilators/login", async (req, res) => {
         createdAt: invigilator.created_at,
       },
     });
-
+//skdufgasuif
   } catch (err) {
     console.error("Invigilator login error:", err.message);
     res.status(500).json({
