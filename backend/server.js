@@ -534,6 +534,7 @@ app.post("/api/invigilators/login", async (req, res) => {
     res.json({
       message: "Login successful",
       invigilator: {
+        id: invigilator.id,
         name: invigilator.name,
         staffId: invigilator.staff_id,
         email: invigilator.email,
@@ -542,7 +543,7 @@ app.post("/api/invigilators/login", async (req, res) => {
         createdAt: invigilator.created_at,
       },
     });
-//skdufgasuif
+
   } catch (err) {
     console.error("Invigilator login error:", err.message);
     res.status(500).json({
@@ -624,6 +625,225 @@ app.post("/api/invigilators", async (req, res) => {
   }
 });
 
+
+// ✅ Get invigilator assignments
+app.get("/api/invigilators/:id/assignments", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [rows] = await db.execute(
+      `SELECT
+         ia.exam_id,
+         s.name AS subject,
+         se.exam_date,
+         se.start_time,
+         se.end_time,
+         c.room_code AS classroom,
+         ia.role
+       FROM invigilator_assignments ia
+       JOIN scheduled_exams se ON ia.exam_id = se.id
+       JOIN subjects s ON se.subject_id = s.id
+       JOIN classrooms c ON ia.classroom_id = c.id
+       WHERE ia.invigilator_id = ?
+       ORDER BY se.exam_date`,
+      [id]
+    );
+
+    const assignments = rows.map((a) => ({
+      examId: a.exam_id,
+      subject: a.subject,
+      examDate: a.exam_date,
+      startTime: a.start_time,
+      endTime: a.end_time,
+      classroom: a.classroom,
+      role: a.role,
+    }));
+
+    res.json(assignments);
+
+  } catch (err) {
+    console.error("Fetch invigilator assignments error:", err.message);
+    res.status(500).json({
+      error: "Internal server error"
+    });
+  }
+});
+
+// ✅ Get seating arrangement for an exam
+app.get("/api/exams/:examId/seating", async (req, res) => {
+  try {
+    const { examId } = req.params;
+
+    const [rows] = await db.execute(
+      `SELECT
+         sa.id,
+         s.registration_number
+       FROM seat_allocations sa
+       JOIN students s ON sa.student_id = s.id
+       WHERE sa.exam_id = ?
+       ORDER BY sa.classroom_id, sa.bench_id, sa.seat_id`,
+      [examId]
+    );
+
+    const seating = rows.map((row, index) => ({
+      seatNumber: index + 1,
+      registrationNumber: row.registration_number
+    }));
+
+    res.json(seating);
+
+  } catch (err) {
+    console.error("Fetch seating error:", err.message);
+    res.status(500).json({
+      error: "Internal server error"
+    });
+  }
+});
+
+
+// ✅ Allocate seat using registration number
+app.post("/api/seat-allocations", async (req, res) => {
+  try {
+    const {
+      registrationNumber,
+      examId,
+      classroomId,
+      benchId,
+      seatId
+    } = req.body;
+
+    if (!registrationNumber || !examId || !classroomId || !benchId || !seatId) {
+      return res.status(400).json({
+        error: "registrationNumber, examId, classroomId, benchId and seatId are required"
+      });
+    }
+
+    const reg = registrationNumber.toUpperCase();
+
+    // 🔎 Find student ID from registration number
+    const [studentRows] = await db.execute(
+      `SELECT id FROM students WHERE registration_number = ?`,
+      [reg]
+    );
+
+    if (studentRows.length === 0) {
+      return res.status(404).json({
+        error: "Student not found"
+      });
+    }
+
+    const studentId = studentRows[0].id;
+
+    // 🔹 Insert seat allocation
+    await db.execute(
+      `INSERT INTO seat_allocations
+       (student_id, exam_id, classroom_id, bench_id, seat_id)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        studentId,
+        examId,
+        classroomId,
+        benchId,
+        seatId
+      ]
+    );
+
+    res.status(201).json({
+      message: "Seat allocated successfully",
+      allocation: {
+        registrationNumber: reg,
+        examId,
+        classroomId,
+        benchId,
+        seatId
+      }
+    });
+
+  } catch (err) {
+    console.error("Seat allocation error:", err.message);
+
+    if (err.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        error: "Seat allocation conflict"
+      });
+    }
+
+    res.status(500).json({
+      error: "Internal server error"
+    });
+  }
+});
+
+// ✅ Report malpractice
+app.post("/api/malpractice", async (req, res) => {
+  try {
+    const {
+      registrationNumber,
+      examId,
+      classroomId,
+      description
+    } = req.body;
+
+    if (!registrationNumber || !examId || !classroomId || !description) {
+      return res.status(400).json({
+        error: "registrationNumber, examId, classroomId and description are required"
+      });
+    }
+
+    const reg = registrationNumber.toUpperCase();
+
+    // 🔎 Find student ID
+    const [studentRows] = await db.execute(
+      `SELECT id FROM students WHERE registration_number = ?`,
+      [reg]
+    );
+
+    if (studentRows.length === 0) {
+      return res.status(404).json({
+        error: "Student not found"
+      });
+    }
+
+    const studentId = studentRows[0].id;
+
+    // 🔹 Insert malpractice record
+    await db.execute(
+      `INSERT INTO malpractice_logs
+       (student_id, exam_id, classroom_id, description)
+       VALUES (?, ?, ?, ?)`,
+      [
+        studentId,
+        examId,
+        classroomId,
+        description
+      ]
+    );
+
+    // 🔹 Also mark student flag
+    await db.execute(
+      `UPDATE students
+       SET malpractice_flag = TRUE
+       WHERE id = ?`,
+      [studentId]
+    );
+
+    res.status(201).json({
+      message: "Malpractice reported successfully",
+      report: {
+        registrationNumber: reg,
+        examId,
+        classroomId,
+        description
+      }
+    });
+
+  } catch (err) {
+    console.error("Malpractice report error:", err.message);
+    res.status(500).json({
+      error: "Internal server error"
+    });
+  }
+});
 
 
 const PORT = process.env.PORT || 3000;
